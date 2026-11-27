@@ -1,0 +1,68 @@
+name: nfl-data
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"   # every 6 h: current season (nflverse pbp updates nightly in season)
+    - cron: "41 9 * * 2"     # Tuesday 09:41 UTC: full history rebuild (picks up stat corrections)
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: "Seasons to rebuild, e.g. 2025-2026 (blank = automatic)"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nfl-data
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Previous data branch
+        run: |
+          if git ls-remote --exit-code origin data >/dev/null; then
+            git fetch --depth 1 origin data
+            git worktree add previous FETCH_HEAD
+            mkdir -p out && cp -r previous/nfl out/
+          fi
+      - name: Choose seasons
+        id: seasons
+        run: |
+          year=$(date -u +%Y); month=$(date -u +%-m)
+          current=$(( month >= 3 ? year : year - 1 ))
+          if [ -n "${{ github.event.inputs.seasons }}" ]; then
+            echo "spec=${{ github.event.inputs.seasons }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "41 9 * * 2" ] || [ ! -d previous ]; then
+            echo "spec=1999-$current" >> "$GITHUB_OUTPUT"
+          else
+            echo "spec=$current" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build
+        env:
+          NFLREADPY_CACHE: filesystem
+        # No LOGO_DEV_TOKEN here: this repository is public, and Logo.dev logos must not be
+        # republished in bulk. The Sports proxy serves logos instead.
+        run: python -m nfl_pipeline build --seasons "${{ steps.seasons.outputs.spec }}" --out out --adopt
+      - name: Publish when content changed
+        run: |
+          if [ -d previous ] && ! python -m nfl_pipeline changed out previous; then
+            echo "No content change; data branch left as is."; exit 0
+          fi
+          cd out
+          git init -q -b data
+          git config user.name "lukeos-nfl-data[bot]"
+          git config user.email "lukeos-nfl-data@users.noreply.github.com"
+          git add -A
+          git commit -qm "data: $(date -u +%Y-%m-%dT%H:%MZ) seasons ${{ steps.seasons.outputs.spec }}"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" data
