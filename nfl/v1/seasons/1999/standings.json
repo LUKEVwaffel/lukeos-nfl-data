@@ -1,0 +1,1 @@
+{"contract":"nfl.v1","schema":1,"kind":"standings","live":false,"attribution":"NFL data: nflverse (nflfastR play-by-play, nfldata schedules), CC BY 4.0","data":{"season":1999,"tiebreak":"approximate","divisions":null,"conferences":null,"complete":true}}
